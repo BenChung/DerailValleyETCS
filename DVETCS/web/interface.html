@@ -1,0 +1,14 @@
+﻿<html>
+    <head>
+        <script type="text/javascript">
+            var speedSocket = new WebSocket("ws://localhost:8088/etcs");
+            speedSocket.onmessage = function (event) {
+                console.log(event.data);
+                document.getElementById("myspeed").innerHTML = event.data
+            }
+        </script>
+    </head>
+    <body>
+        Current speed: <span id="myspeed"></span>
+    </body>
+</html>

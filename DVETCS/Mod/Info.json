@@ -1,0 +1,6 @@
+﻿{
+  "Id": "DVETCS",
+  "Version": "1.0.0",
+  "AssemblyName": "DVETCS.dll",
+  "EntryMethod": "DVETCS.ETCSMain.Load"
+}
