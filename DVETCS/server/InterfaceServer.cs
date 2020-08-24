@@ -24,9 +24,12 @@ namespace DVETCS
             server.RunAsync();
         }
 
-        public void NotifySpeed(float currentSpeed)
+        public void NotifySpeed(float currentSpeed,
+            (SpeedProfile.SpeedStateInfo? currentSSI, SpeedProfile.TargetStateInfo currentTSI) speedLimit,
+            List<SpeedProfile.MRSPElem> mrspProfile)
         {
-            etcsHandler.NotifySpeed(currentSpeed);
+            var (ssi, tsi) = speedLimit;
+            etcsHandler.NotifyState(currentSpeed, ssi, mrspProfile);
         }
 
         public void Dispose()

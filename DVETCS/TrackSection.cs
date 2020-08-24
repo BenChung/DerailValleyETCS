@@ -9,7 +9,7 @@ using UnityEngine;
 
 namespace DVETCS
 {
-    class TrackBlock : IEnumerable<TrackBlock.TrackInfo>
+    public class TrackBlock : IEnumerable<TrackBlock.TrackInfo>
     {
         public struct TrackInfo
         {
@@ -26,13 +26,16 @@ namespace DVETCS
         public struct JunctionInfo
         {
             public readonly float position;
-            public readonly CrossingType crossing;
             public readonly int? branch;
-            public JunctionInfo(float position, CrossingType crossing, int? branch)
+            public readonly TrackInfo next;
+            public readonly TrackInfo prev;
+
+            public JunctionInfo(float position, int? branch, TrackInfo next, TrackInfo prev)
             {
                 this.position = position;
-                this.crossing = crossing;
                 this.branch = branch;
+                this.next = next;
+                this.prev = prev;
             }
         }
         public class TrackUnit
@@ -61,6 +64,12 @@ namespace DVETCS
         }
         private Dictionary<RailTrack, TrackInfo> tracks;
         private Dictionary<Junction, JunctionInfo> junctions;
+
+        private Dictionary<TrackInfo, Junction> forwardJunctionMap = new Dictionary<TrackInfo, Junction>();
+        private Dictionary<TrackInfo, Junction> backwardJunctionMap = new Dictionary<TrackInfo, Junction>();
+        private Dictionary<TrackInfo, LinkedListNode<TrackInfo>> trackMap = new Dictionary<TrackInfo, LinkedListNode<TrackInfo>>();
+        private LinkedList<TrackInfo> trackList = new LinkedList<TrackInfo>();
+
         private RangeTree<float, TrackInfo> trackRanges;
         public TrackBlock(RailTrack baseTrack, bool direction)
         {
@@ -70,10 +79,32 @@ namespace DVETCS
             tracks[baseTrack] = trackInfo;
             junctions = new Dictionary<Junction, JunctionInfo>();
             trackRanges.Add(0.0f, baseTrack.curve.length, trackInfo);
+            var trackNode = trackList.AddFirst(trackInfo);
+            trackMap.Add(trackInfo, trackNode);
+           
             TrackAdded += delegate { };
             TrackRemoved += delegate { };
             JunctionAdded += delegate { };
             JunctionRemoved += delegate { };
+        }
+
+        public void Clear(RailTrack baseTrack, bool direction)
+        {
+            foreach (var ti in tracks)
+                TrackRemoved.Invoke(this, ti.Value);
+            foreach (var jn in junctions)
+                JunctionRemoved.Invoke(this, jn.Key, jn.Value);
+            tracks.Clear();
+            trackRanges.Clear();
+            var trackInfo = new TrackInfo(baseTrack, direction, 0.0);
+            tracks[baseTrack] = trackInfo;
+            junctions.Clear();
+            trackMap.Clear();
+            forwardJunctionMap.Clear();
+            backwardJunctionMap.Clear();
+            trackRanges.Add(0.0f, baseTrack.curve.length, trackInfo);
+            trackList.AddFirst(trackInfo);
+
         }
 
         private (LinkedList<(RailTrack track, bool direction, CrossingType crossing, Junction junction, int? branch)>, bool, RailTrack, Junction) SearchFromtrack(RailTrack track)
@@ -88,7 +119,7 @@ namespace DVETCS
 
                 if (tracks.ContainsKey(ctrack))
                 {
-                    Debug.Log($"njunct {String.Join(", ", history.Select(s=>s.Item4))} ctype {String.Join(", ", history.Select(s => s.Item3))}");
+                    //Debug.Log($"njunct {String.Join(", ", history.Select(s=>s.Item4))} ctype {String.Join(", ", history.Select(s => s.Item3))}");
                     return (history, cdirection, ctrack, cjunction);
                 }
                 
@@ -152,10 +183,44 @@ namespace DVETCS
             }
             throw new Exception("Invalid junction type");
         }
-
-        public void RemoveFrom(float position, bool removeDirection)
+        
+        public void RemoveFollowing(TrackInfo from, bool removeDirection)
         {
-            Debug.Log($"Removing from {position} in {removeDirection}");
+            RemoveFollowing(trackMap[from], removeDirection);
+        }
+
+        public void RemoveFollowing(LinkedListNode<TrackInfo> nodeFrom, bool removeDirection)
+        {
+            var directionJunctionMap = removeDirection ? forwardJunctionMap : backwardJunctionMap;
+            var opposingJunctionMap = removeDirection ? backwardJunctionMap : forwardJunctionMap;
+            var currentNode = nodeFrom;
+            bool first = true;
+            while (currentNode != null)
+            {
+                var nextNode = removeDirection ? currentNode.Next : currentNode.Previous;
+                if (!first) // we should leave the first node intact
+                {
+                    tracks.Remove(currentNode.Value.track);
+                    trackList.Remove(currentNode);
+                    trackRanges.Remove(currentNode.Value);
+                    TrackRemoved.Invoke(this, currentNode.Value);
+                }
+                if (directionJunctionMap.ContainsKey(currentNode.Value))
+                {
+                    var removedJunction = directionJunctionMap[currentNode.Value];
+                    var junctionInfo = junctions[removedJunction];
+                    junctions.Remove(removedJunction);
+
+                    directionJunctionMap.Remove(currentNode.Value);
+                    if (nextNode != null)
+                        opposingJunctionMap.Remove(nextNode.Value);
+
+                    JunctionRemoved.Invoke(this, removedJunction, junctionInfo);
+                }
+                first = false;
+                currentNode = nextNode;
+            }
+            /*Debug.Log($"Removing from {position} in {removeDirection}");
             foreach (var trk in tracks)
             {
                 Debug.Log($"track {trk.Key.GetInstanceID()}@{trk.Value.offset} to {trk.Value.offset + trk.Key.curve.length} remove {(removeDirection ? trk.Value.offset >= position : trk.Value.offset + trk.Key.curve.length - float.Epsilon <= position)}");
@@ -163,32 +228,7 @@ namespace DVETCS
             foreach (var jn in junctions)
             {
                 Debug.Log($"junction {jn.Key.GetInstanceID()} at {jn.Value.position} remove {(removeDirection ? jn.Value.position >= position + float.Epsilon : jn.Value.position - float.Epsilon <= position)}");
-            }
-            var rmTracks = tracks.Where(t => removeDirection ? t.Value.offset >= position : t.Value.offset + t.Key.curve.length - float.Epsilon <= position).ToArray();
-            var rmJunctions = junctions.Where(j => removeDirection ? j.Value.position >= position + float.Epsilon : j.Value.position - float.Epsilon <= position).ToArray();
-            foreach (var track in rmTracks)
-            {
-                tracks.Remove(track.Key);
-                trackRanges.Remove(track.Value);
-                TrackRemoved.Invoke(this, track.Value);
-            }
-            foreach (var junction in rmJunctions)
-            {
-                junctions.Remove(junction.Key);
-                JunctionRemoved.Invoke(this, junction.Key, junction.Value);
-            }
-        }
-
-        public void RemoveJunction(Junction junction, bool removeDirection)
-        {
-            if (!junctions.ContainsKey(junction)) return;
-            RemoveFrom(junctions[junction].position, removeDirection);
-        }
-
-        public void RemoveTrack(RailTrack track, bool removeDirection)
-        {
-            if (!tracks.ContainsKey(track)) return; // track does not exist in the current block
-            RemoveFrom((float)tracks[track].offset + (removeDirection ? 0.0f : (float)track.curve.length), removeDirection);
+            }*/
         }
 
         public TrackInfo? AddTrack(RailTrack track)
@@ -200,7 +240,7 @@ namespace DVETCS
             if (tracks.ContainsKey(track))
                 return tracks[track];
             var (path, idir, incident, ijunction) = SearchFromtrack(track);
-            Debug.Log($"adding track {track.GetInstanceID()} ijunction {(ijunction ? ijunction.GetInstanceID() : -1 )}");
+            //Debug.Log($"adding track {track.GetInstanceID()} ijunction {(ijunction ? ijunction.GetInstanceID() : -1 )}");
             if (path == null) return null;
 
             // we know that the tracks will appear in reverse order, so we walk "back" along the path
@@ -213,55 +253,54 @@ namespace DVETCS
             double offset = attachInfo.offset + (extendAction ? pairedTo.curve.length : 0.0);
 
             var connectTo = pairedTo;
-            if (removeExisting && ijunction != null && junctions.ContainsKey(ijunction))
-            {
-                JunctionRemoved.Invoke(this, ijunction, junctions[ijunction]);
-                junctions.Remove(ijunction);
-            }
+            var pairedAttachInfo = attachInfo;
+
+            var inDirectionMap = extendAction ? forwardJunctionMap : backwardJunctionMap;
+            var againstDirectionMap = extendAction ? backwardJunctionMap : forwardJunctionMap;
             foreach ((RailTrack track, bool direction, CrossingType crossing, Junction junction, int? branch) result in path.Reverse())
             {
                 var relDir = !GetDirectionOfSourceTrack(result.track, result.direction, result.crossing);
                 var computedOffset = extendAction ? offset : offset - result.track.curve.length;
-                Debug.Log($"EA {result.track.GetInstanceID()} {relDir != extendAction} {computedOffset} -> {computedOffset + result.track.curve.length} junction: {result.junction}");
+                //Debug.Log($"EA {result.track.GetInstanceID()} {relDir != extendAction} {computedOffset} -> {computedOffset + result.track.curve.length} junction: {result.junction}");
                 var ti = new TrackInfo(result.track, relDir != extendAction, computedOffset);
 
-                if (removeExisting)
+
+                var attachNode = trackMap[pairedAttachInfo];
+                if (attachNode != null && ((extendAction && attachNode.Next != null) || (!extendAction && attachNode.Previous != null)))
                 {
-                    var toRemove = trackRanges.Query((float)computedOffset + (extendAction?float.Epsilon:0.0f), (float)computedOffset + result.track.curve.length - (extendAction ? 0.0f : float.Epsilon));
-                    if (toRemove.Count() > 0)
-                    {
-                        Debug.Log($"rem cands {String.Join(", ", toRemove.Select(tr=>$"{tr.offset} -> {tr.offset + tr.track.curve.length}"))} for {computedOffset} to {computedOffset + result.track.curve.length}");
-                        var removeExtents = toRemove.Select(r => extendAction ? r.offset : r.offset + r.track.curve.length);
-                        var removeFrom = extendAction ? removeExtents.Min() : removeExtents.Max();
-                        Debug.Log("Remove action");
-                        RemoveFrom((float)removeFrom + (extendAction?1.0f:-1.0f), extendAction);
-                    }
+                    RemoveFollowing(attachNode, extendAction);
                 }
 
-                Debug.Log($"extend 2 {ti.track.GetInstanceID()}");
+                //Debug.Log($"extend 2 {ti.track.GetInstanceID()}");
 
                 tracks[result.track] = ti;
+                trackMap[ti] = extendAction ? trackList.AddAfter(attachNode, ti) : trackList.AddBefore(attachNode, ti);
                 trackRanges.Add((float)ti.offset, (float)ti.offset + result.track.curve.length, ti);
                 if (result.junction != null)
                 {
                     var junctionPos = (float)(offset);
-                    var ji = new JunctionInfo(junctionPos, result.crossing, result.branch);
+                    var ji = new JunctionInfo(junctionPos, result.branch, extendAction ? ti : pairedAttachInfo, extendAction ? pairedAttachInfo : ti);
+                    /*
                     if (junctions.ContainsKey(result.junction))
                         Debug.Log($"re-adding junction {result.junction.GetInstanceID()} at {junctions[result.junction].position} w/ track {result.track.GetInstanceID()}");
                     else
-                        Debug.Log($"adding junction {result.junction.GetInstanceID()}");
+                        Debug.Log($"adding junction {result.junction.GetInstanceID()}");*/
                     junctions.Add(result.junction, ji);
+                    inDirectionMap.Add(pairedAttachInfo, result.junction);
+                    againstDirectionMap.Add(ti, result.junction);
                     JunctionAdded.Invoke(this, result.junction, ji);
                 }
-                Debug.Log($"extend 3");
+                //Debug.Log($"extend 3");
+
                 TrackAdded.Invoke(this, ti, extendAction, result.junction);
                 pairedTo = result.track;
+                pairedAttachInfo = ti;
                 if (extendAction)
                     offset += result.track.curve.length;
                 else
                     offset -= result.track.curve.length;
             }
-            Debug.Log($"extend 4 id {path.Last.Value.track.GetInstanceID()}");
+            //Debug.Log($"extend 4 id {path.Last.Value.track.GetInstanceID()}");
             return tracks[path.Last.Value.track]; // we've just ensured that it exists
         }
         
@@ -328,6 +367,7 @@ namespace DVETCS
 
         public TrackInfo? GetTrackInfo(RailTrack track)
         {
+            if (!tracks.ContainsKey(track)) return null;
             return tracks[track];
         }
         public TrackInfo? GetTrackInfo(float distanceAlong)
@@ -358,6 +398,10 @@ namespace DVETCS
         public (TrackInfo, float) GetSpan(float along)
         {
             var tracks = trackRanges.Query(along);
+            if (tracks.Count() == 0)
+            {
+                throw new Exception($"No valid track at point {along}; valid range {Min} - {Max}");
+            }
             var track = tracks.First();
             var span = (along - track.offset) / track.track.curve.length;
             if (!track.relativeDirection) span = 1 - span;
@@ -396,6 +440,22 @@ namespace DVETCS
             get
             {
                 return junctions.AsEnumerable();
+            }
+        }
+
+        public float Min
+        {
+            get
+            {
+                return (float)trackList.Min(t => t.offset);
+            }
+        }
+
+        public float Max
+        {
+            get
+            {
+                return (float) trackList.Max(t => t.offset + t.track.curve.length);
             }
         }
     }

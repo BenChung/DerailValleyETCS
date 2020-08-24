@@ -2,10 +2,12 @@
 using DV.Signs;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
+using MathNet.Numerics.Statistics;
 using TMPro;
 using UnityEngine;
 
@@ -15,19 +17,16 @@ namespace DVETCS
      * The actual coordinate system that this uses is weird. It adopts each RailTrack's dt directly - which is not constant.
      * Concequently there's no actual way to go from position in this to position in the "real world"
      */
-    class TrackManager
+    [RequireComponent(typeof(LocoControllerBase))]
+    class TrackManager : MonoBehaviour
     {
-
-        private SignPlacer placer;
-        private Dictionary<Bogie, double> bogiePositions;
-        private SortedDictionary<double, double> speedLimits;
+        private LocoControllerBase boundLoco = null;
         private TrackBlock trackSection;
-        public TrackManager()
-        {
-            this.placer = UnityEngine.Object.FindObjectOfType<SignPlacer>();
-            this.bogiePositions = new Dictionary<Bogie, double>();
-            this.speedLimits = new SortedDictionary<double, double>();
-        }
+        private SpeedProfile speedProfile;
+
+        private Dictionary<Junction, Action<Junction.SwitchMode, int>> switchlisteners = new Dictionary<Junction, Action<Junction.SwitchMode, int>>();
+        private Dictionary<Bogie, double> bogiePositions;
+        private BrakingCurves brakingCurves;
 
         private int TrackDirection(Bogie bogie)
         {
@@ -36,12 +35,16 @@ namespace DVETCS
         }
         private void AddBogie(Bogie bogie)
         {
-            if (bogiePositions.ContainsKey(bogie)) return;
-            TrackBlock.TrackInfo? currentTrack = trackSection.AddTrack(bogie.track);
+            if (bogie.track == null)
+            {
+                Debug.Log("Null bogie track");
+                return;
+            }
+            TrackBlock.TrackInfo? currentTrack = trackSection.AddTrack(bogie.track, true);
             if (!currentTrack.HasValue) return; // this bogie isn't on contigous track
             double trackOffset = (double)currentTrack?.offset;
             bool inTravelDir = (bool)currentTrack?.relativeDirection;
-            var bogiePos = inTravelDir ? bogie.traveller.Span : bogie.traveller.Span;
+            var bogiePos = inTravelDir ? bogie.traveller.Span : currentTrack.Value.track.curve.length - bogie.traveller.Span;
             bogiePositions[bogie] = bogiePos + currentTrack.Value.offset;
         }
         private List<Bogie> GetTrainBogies(LocoControllerBase loco)
@@ -53,90 +56,205 @@ namespace DVETCS
             return bogies;
         }
 
-        private int tryParseInt(string text)
+        private void SetupLoco()
         {
-            int i = -1;
-            if (int.TryParse(text, out i))
-                return i;
-            return -1;
+            // we affix the "zero" of our coordinate system to the 0 point of the RailTrack that the locomotive's front bogie is currently sitting on
+            // the new axis will be forward-aligned with the bogie
+            var baseBogie = boundLoco.train.Bogies[0];
+            var baseTrack = baseBogie.track;
+            bogiePositions.Clear();
+            var direction = TrackDirection(baseBogie);
+            trackSection = new TrackBlock(baseTrack, direction > 0);
         }
-        private bool AlignedDirections(Vector3 a, Vector3 b, bool direction, float tolerance)
-        {
-            a = direction ? a : -a;
-            a = new Vector3(a.x, 0.0f, a.z);
-            b = new Vector3(b.x, 0.0f, b.z);
-            float det = Vector3.Dot(a.normalized, b.normalized);
-            return det < tolerance;
-        }
-        Dictionary<SignDebug, Lines.VectorLine> signLines = new Dictionary<SignDebug, Lines.VectorLine>();
-        List<Lines.VectorLine> lastLines = new List<Lines.VectorLine>();
-        private void AddSigns(TrackBlock.TrackInfo along, Dictionary<BezierPoint, float> curveSpans, SignDebug[] signs)
-        {
-            var stopwatch = new System.Diagnostics.Stopwatch();
-            stopwatch.Start();
-            var planes = signs.Select(s => (sign:s, offset:s.transform.position, normal: s.transform.TransformDirection(Vector3.forward)));
-            var intersections = planes.Select(inter=>(
-                    sign:inter.sign, 
-                    intersections: along.track.curve.PlaneIntersect(inter.normal, inter.offset)
-                                                    .Where(i => AlignedDirections(along.track.curve.GetTangent(i.p1, i.p2, (float)i.span), inter.normal, along.relativeDirection, -0.98f))
-                                                    .Where(i => Vector3.Distance(BezierCurve.GetPoint(i.p1, i.p2, (float)i.span), inter.offset) < 3f), 
-                    speeds:inter.sign.GetComponentsInChildren<TextMeshPro>()
-                                     .Where(tm=>!String.IsNullOrWhiteSpace(tm.text) && tryParseInt(tm.text) >= 0)
-                                     .Select(tm=>int.Parse(tm.text)*10))).ToList();
 
-            foreach (var intersection in intersections)
-            {
-                if (intersection.intersections.Count() == 0) continue; // sign not relevant
-                var primeInt = intersection.intersections.OrderBy(e => Vector3.Distance(BezierCurve.GetPoint(e.p1, e.p2, (float)e.span), intersection.sign.transform.position)).First();
-                var signSpan = along.offset + curveSpans[primeInt.p1] + primeInt.span*(curveSpans[primeInt.p2] - curveSpans[primeInt.p1]);
-                var signSpeed = 0;
-                if (intersection.speeds.Count() == 1)
-                {
-                    signSpeed = intersection.speeds.First();
-                } else // sign for a junction
-                {
-                    var selJunction = along.relativeDirection ? along.track.outJunction : along.track.inJunction;
-                    if (selJunction == null)
-                    {
-                        throw new Exception($"Null junction following junction speed sign {signSpan}");
-                    }
-                    if (selJunction.inBranch.track != along.track)
-                        throw new Exception("Invalid junction construction (junction following junction speed sign not properly aligned)");
-                    signSpeed = intersection.speeds.ToList()[selJunction.selectedBranch];
-                }
-                speedLimits[signSpan] = signSpeed;
-            }
-            stopwatch.Stop();
-        }
         public void LoadSituation(LocoControllerBase loco)
         {
             if (loco == null) return;
-            // we affix the "zero" of our coordinate system to the 0 point of the RailTrack that the locomotive's front bogie is currently sitting on
-            // the new axis will be forward-aligned with the bogie
-            var baseBogie = loco.train.Bogies[0];
-            var baseTrack = baseBogie.track;
-            bogiePositions.Clear();
-            speedLimits.Clear();
-            var direction = TrackDirection(baseBogie);
-            trackSection = new TrackBlock(baseTrack, direction > 0);
 
             // add the bogies
             var trainBogies = GetTrainBogies(loco);
-            Debug.Log("bogies");
             trainBogies.ForEach(AddBogie);
+            brakingCurves = new BrakingCurves(bogiePositions);
+            Debug.Log($"Load {bogiePositions.Count}");
+            this.speedProfile = new SpeedProfile(trackSection, brakingCurves, (float)(bogiePositions.Values.Max() - bogiePositions.Values.Min()));
 
-            // we now know where all the bogies are. We now need to figure out where the signs are.
+            EnsureLimit((float)bogiePositions.Values.Min());
+            EnsureDistance(1000f);
+            speedProfile.UpdateMRSP();
+        }
 
-            RemoveLines();
-            var signs = UnityEngine.Object.FindObjectsOfType<SignDebug>();
-            foreach (var track in trackSection)
+        public void Start()
+        {
+            this.bogiePositions = new Dictionary<Bogie, double>();
+            boundLoco = GetComponent<LocoControllerBase>();
+            SetupLoco();
+            trackSection.JunctionAdded += JunctionAdded;
+            trackSection.JunctionRemoved += JunctionRemoved;
+            trackSection.TrackAdded += (block, added, sideAdded, via) => drawDirty = true;
+            trackSection.TrackRemoved += (block, removed) => drawDirty = true;
+            WorldMover.Instance.WorldMoved += (mover, vector3) => drawDirty = true;
+            void OnLoadingNewScenes() => speedProfile.RefreshSigns();
+            foreach (var s in GameObject.FindGameObjectsWithTag(Streamer.STREAMERTAG))
             {
-                var spans = track.track.curve.PointSpans();
-                AddSigns(track, spans, signs);
+                s.GetComponent<Streamer>().LoadingNewScenes += OnLoadingNewScenes;
             }
 
+            LoadSituation(boundLoco);
+        }
+
+        private void JunctionRemoved(TrackBlock block, Junction removed, TrackBlock.JunctionInfo info)
+        {
+            if (!switchlisteners.ContainsKey(removed)) return;
+            var listener = switchlisteners[removed];
+            switchlisteners.Remove(removed);
+            removed.Switched -= listener;
+        }
+
+        private void JunctionAdded(TrackBlock block, Junction added, TrackBlock.JunctionInfo info)
+        {
+            Debug.Log($"junction {added.GetInstanceID()} added");
+            void invalidateDelegate(Junction.SwitchMode arg1, int arg2)
+            {
+                Debug.Log($"junction {added.GetInstanceID()} switched");
+                if (info.position < bogiePositions.Values.Max()) return;// if the newly added track is behind the front bogie we don't need to watch the switch position
+                trackSection.RemoveFollowing(info.prev, true);
+            }
+            switchlisteners.Add(added, invalidateDelegate);
+            added.Switched += invalidateDelegate;
+        }
+
+        private float lastvel = 0.0f;
+        private float lasttime = 0.0f;
+
+        private bool drawDirty = true;
+        private List<Lines.VectorLine> trackLines = new List<Lines.VectorLine>();
+        private List<Lines.VectorLine> otherLines = new List<Lines.VectorLine>();
+        public void DrawDebug()
+        {
+            var startPos = trackSection.Select(t => t.offset).Min();
+            TrackBlock.TrackInfo? lastTrack = null; double largestOffset = double.MinValue;
+            foreach (var track in trackSection)
+            {
+                if (track.offset > largestOffset)
+                {
+                    lastTrack = track;
+                    largestOffset = track.offset;
+                }
+            }
+            var distance = largestOffset + lastTrack.Value.track.curve.length - startPos;
+            var minTrack = startPos;
+            if (drawDirty)
+            {
+                Debug.Log("Draw dirty");
+                trackLines.ForEach(t=>t.Remove());
+                trackLines.Clear();
+                foreach (var track in trackSection)
+                {
+                    //Debug.Log($"track {track.track.GetInstanceID()} distance {distance} wsstart {track.offset} wsend {track.offset + track.track.curve.length} start {((track.offset - startPos) / distance)} end {(track.offset + track.track.curve.length - startPos) / distance} start {((track.offset - startPos) / distance)} end {(track.offset + track.track.curve.length - startPos) / distance}");
+                    var iColor = Color.Lerp(Color.red, Color.green, (float) ((track.offset - startPos) / distance));
+                    var eColor = Color.Lerp(Color.red, Color.green,
+                        (float) ((track.offset + track.track.curve.length - startPos) / distance));
+                    var startColor = track.relativeDirection ? iColor : eColor;
+                    var endColor = track.relativeDirection ? eColor : iColor;
+                    trackLines.Add(Lines.RegisterLine(Lines.DrawCurve(track.track.curve, Vector3.up * 10.0f, startColor, endColor)));
+                }
+
+                drawDirty = false;
+            }
+
+            otherLines.ForEach(t => t.Remove());
+            otherLines.Clear();
+            foreach (var bogiePos in bogiePositions)
+            {
+                var bogieTrackInfo = trackSection.GetTrackInfo(bogiePos.Key.track).Value;
+                var mappedPosition = (bogiePos.Value - bogieTrackInfo.offset) / bogiePos.Key.track.curve.length;
+                var bogieWorldPos = bogiePos.Key.track.curve.GetPointAt(bogieTrackInfo.relativeDirection ? (float)mappedPosition : (float)(1.0 - mappedPosition));
+                otherLines.Add(Lines.RegisterLine(Lines.DrawLine(bogieWorldPos, bogieWorldPos + Vector3.up * 10.0f, Color.yellow)));
+            }
+            foreach (var junction in trackSection.Junctions)
+            {
+                otherLines.Add(Lines.RegisterLine(Lines.DrawLine(junction.Key.position, junction.Key.position + Vector3.up * 10.0f, Color.red)));
+            }
+            Debug.Log("bogies " + String.Join(",", bogiePositions.Select(s => $"{s.Key} : {s.Value}")));
+            speedProfile.DrawDebug();
+        }
+
+        private float lastSignDistance = 0.0f;
+        private float maxBogiePos = 0.0f;
+        public void FixedUpdate()
+        {
+            //update bogie positions
+            bogiePositions.Clear();
+            var baseBogie = boundLoco.train.Bogies[0];
+            AddBogie(baseBogie);
+            if (TrackDirection(baseBogie) > 0 !=
+                trackSection.GetSpan((float) bogiePositions[baseBogie]).Item1.relativeDirection)
+            {
+                speedProfile.Clear();
+                trackSection.Clear(baseBogie.track,
+                    TrackDirection(baseBogie) > 0); // rebuild the track section, since we're backwards
+            }
+
+            var trainBogies = GetTrainBogies(boundLoco);
+            trainBogies.ForEach(AddBogie);
+            if (maxBogiePos == 0.0f && bogiePositions.Count > 0)
+            {
+                maxBogiePos = (float)bogiePositions.Values.Max();
+            }
+
+            //ensure that forward and backward state is maintained
+            var minPosition = (float)bogiePositions.Values.Min();
+            //Debug.Log("update trkconfig");
+            UpdateTrailing(minPosition);
+            EnsureLimit(minPosition);
+            EnsureDistance(1000f);
+
+            if (lastSignDistance > 500.0f)
+            {
+                speedProfile.RefreshSigns();
+                lastSignDistance = 0.0f;
+            }
+
+            //update the MRSP
+            speedProfile.UpdateMRSP();
+
+            if (bogiePositions.Count > 0)
+            {
+                float newHead = (float) bogiePositions.Values.Max();
+                float deltaDist = Mathf.Abs(maxBogiePos - newHead);
+                lastSignDistance += deltaDist;
+                maxBogiePos = newHead;
+            }
+
+            //DrawDebug();
+        }
+
+        // clears rear track that is behind a branch-switch (e.g. where we came in along a branch)
+        private void UpdateTrailing(float minPosition)
+        {
+            Junction toRemove = null; TrackBlock.JunctionInfo? remInfo = null; float maxPos = float.MinValue;
+            //Debug.Log($"test junctions {trackSection.Junctions.Count()} range {minPosition}");
+            foreach (var junction in trackSection.Junctions)
+            {
+                //Debug.Log($"testing junction {junction.Key.GetInstanceID()} {junction.Value.position} {junction.Value.branch == junction.Key.defaultSelectedBranch}");
+                if (junction.Value.position < minPosition && junction.Value.position > maxPos && junction.Value.prev.track != junction.Key.inBranch.track && junction.Value.branch != junction.Key.defaultSelectedBranch)
+                {
+                    toRemove = junction.Key;
+                    remInfo = junction.Value;
+                    maxPos = junction.Value.position;
+                }
+            }
+            if (toRemove != null)
+            {
+                //Debug.Log($"Removing junction {toRemove.GetInstanceID()} with info {remInfo.Value.position} {remInfo.Value.branch}");
+                trackSection.RemoveFollowing(remInfo.Value.next, false);
+            }
+        }
+
+        public void EnsureLimit(float at)
+        {
             int niters = 0;
-            while (speedLimits.Count == 0 || bogiePositions.Values.Min() < speedLimits.Keys.Min()) // if there's no sign controlling the rear of the train
+            while (at < speedProfile.FirstLimit()) // if there's no sign controlling the rear of the train
             {
                 var firstTrack = trackSection.GetFirstTrack();
                 if (!firstTrack.HasValue) break; // empty list, we have other problems
@@ -144,54 +262,62 @@ namespace DVETCS
                 var newTrack = TrackBlock.TrackAlongDir(track.track, !track.relativeDirection, false);
                 if (newTrack != null)
                 {
-                    var newTrackInfo = trackSection.AddTrack(newTrack);
-                    var spans = newTrack.curve.PointSpans();
-                    AddSigns(newTrackInfo.Value, spans, signs);
-                } else
+                    trackSection.AddTrack(newTrack);
+                }
+                else
                 {
                     // we've ran out of track
-                    speedLimits[track.offset] = 40.0f; // pick a reasonable default
-                    Debug.Log($"default end");
+                   // speedProfile.AddLimit((float)track.offset + float.Epsilon, 40.0f);
                     break;
                 }
                 if (niters > 10) break;
                 niters++;
             }
-            Debug.Log(String.Join(",", trackSection.Select(ts => ts.offset.ToString())));
-
-            foreach (var track in trackSection)
-            {
-                var startColor = track.relativeDirection ? Color.magenta : Color.blue;
-                var endColor = track.relativeDirection ? Color.blue : Color.magenta;
-                lastLines.Add(Lines.DrawCurve(track.track.curve, Vector3.up * 10.0f, startColor, endColor));
-            }
-            foreach (var bogiePos in bogiePositions)
-            {
-                var bogieTrackInfo = trackSection.GetTrackInfo(bogiePos.Key.track).Value;
-                var mappedPosition = (bogiePos.Value - bogieTrackInfo.offset) / bogiePos.Key.track.curve.length;
-                var bogieWorldPos = bogiePos.Key.track.curve.GetPointAt((float)mappedPosition);
-                lastLines.Add(Lines.DrawLine(bogieWorldPos, bogieWorldPos + Vector3.up * 10.0f, Color.yellow));
-            }
-            foreach (var speedPos in speedLimits)
-            {
-                var ti = trackSection.GetTrackInfo((float)speedPos.Key);
-                if (ti == null)
-                {
-                    Debug.Log("Invalid sign positions");
-                    continue;
-                }
-                var mappedPosition = (speedPos.Key - ti.Value.offset) / ti.Value.track.curve.length;
-                var speedWorldPos = ti.Value.track.curve.GetPointAt((float)mappedPosition);
-                lastLines.Add(Lines.DrawLine(speedWorldPos, speedWorldPos + Vector3.up * 10.0f, Color.green));
-
-            }
-            Debug.Log("signs " + String.Join(",", speedLimits.Select(s => $"{s.Key} : {s.Value}")));
         }
 
-        public void RemoveLines()
+        public void EnsureDistance(float dist)
         {
-            foreach (var line in lastLines) line.Remove();
-            lastLines.Clear();
+            int niters = 0;
+            var target = dist + (float)bogiePositions.Values.Max();
+            //Debug.Log($"target dist {target}");
+            while (true)
+            {
+                var lastTrack = trackSection.GetLastTrack();
+                if (!lastTrack.HasValue) break; // empty list, we have other problems
+                if (lastTrack.Value.offset + lastTrack.Value.track.curve.length > target) break;
+                var track = lastTrack.Value;
+                var newTrack = TrackBlock.TrackAlongDir(track.track, track.relativeDirection, true);
+                if (newTrack != null)
+                {
+                    var res = trackSection.AddTrack(newTrack);
+                    if (res == null)
+                    {
+                        break;
+                    } else
+                    {
+                        if (res.Value.offset + res.Value.track.curve.length > target) break;
+                    }
+                }
+                else
+                {
+                    // add braking curve at end of track
+                    break;
+                }
+                if (niters > 20) break;
+                niters++;
+            }
+        }
+
+
+        public (SpeedProfile.SpeedStateInfo? currentSSI, SpeedProfile.TargetStateInfo currentTSI) CurrentSpeedLimit(float speed)
+        {
+            if (bogiePositions.Count == 0 || speedProfile == null) return (null, null);
+            return speedProfile.GetSpeedLimit(bogiePositions.Values.Max(), speed, 0.0f);
+        }
+
+        public List<SpeedProfile.MRSPElem> MRSPProfile(float vest)
+        {
+            return speedProfile.GetClientMRSP((float)bogiePositions.Values.Max(), vest);
         }
     }
 }

@@ -9,81 +9,6 @@ namespace DVETCS
 {
     public static class CurveUtils
     {
-        // from Math.NET Numerics. License:
-        // <copyright file="Cubic.cs" company="Math.NET">
-        // Math.NET Numerics, part of the Math.NET Project
-        // http://numerics.mathdotnet.com
-        // http://github.com/mathnet/mathnet-numerics
-        //
-        // Copyright (c) 2009-2014 Math.NET
-        //
-        // Permission is hereby granted, free of charge, to any person
-        // obtaining a copy of this software and associated documentation
-        // files (the "Software"), to deal in the Software without
-        // restriction, including without limitation the rights to use,
-        // copy, modify, merge, publish, distribute, sublicense, and/or sell
-        // copies of the Software, and to permit persons to whom the
-        // Software is furnished to do so, subject to the following
-        // conditions:
-        //
-        // The above copyright notice and this permission notice shall be
-        // included in all copies or substantial portions of the Software.
-        //
-        // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-        // EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
-        // OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-        // NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
-        // HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
-        // WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-        // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
-        // OTHER DEALINGS IN THE SOFTWARE.
-        // </copyright>
-        static void QR(double a2, double a1, double a0, out double Q, out double R)
-        {
-            Q = (3*a1 - a2*a2) / 9.0;
-            R = (9.0*a2*a1 - 27*a0 - 2*a2*a2*a2) / 54.0;
-        }
-        static double PowThird(double n)
-        {
-            return Math.Pow(Math.Abs(n), 1d / 3d)*Math.Sign(n);
-        }
-        public static (double, double, double) RealRoots(double a0, double a1, double a2)
-        {
-            double Q, R;
-            QR(a2, a1, a0, out Q, out R);
-
-            var Q3 = Q*Q*Q;
-            var D = Q3 + R*R;
-            var shift = -a2 / 3d;
-
-            double x1;
-            double x2 = double.NaN;
-            double x3 = double.NaN;
-
-            if (D >= 0)
-            {
-                // when D >= 0, use eqn (54)-(56) where S and T are real
-                double sqrtD = Math.Pow(D, 0.5);
-                double S = PowThird(R + sqrtD);
-                double T = PowThird(R - sqrtD);
-                x1 = shift + (S + T);
-                if (D == 0)
-                {
-                    x2 = shift - S;
-                }
-            }
-            else
-            {
-                // 3 real roots, use eqn (70)-(73) to calculate the real roots
-                double theta = Math.Acos(R / Math.Sqrt(-Q3));
-                x1 = 2d*Math.Sqrt(-Q)*Math.Cos(theta / 3.0) + shift;
-                x2 = 2d*Math.Sqrt(-Q)*Math.Cos((theta + 2.0*Math.PI) / 3d) + shift;
-                x3 = 2d*Math.Sqrt(-Q)*Math.Cos((theta - 2.0*Math.PI) / 3d) + shift;
-            }
-
-            return (x1,x2,x3);
-        }
-        // end from Math.NET
         private static (double, double?, double?) IntersectCubic(Vector3 normal, Vector3 offset, Vector3 P0, Vector3 P1, Vector3 P2, Vector3 P3)
         {
             double n1 = normal.x, n2 = normal.y, n3 = normal.z;
@@ -97,7 +22,7 @@ namespace DVETCS
             double b = (3*n1*P01 + 3*n2*P02 + 3*n3*P03 - 6*n1*P11 - 6*n2*P12 - 6*n3*P13 + 3*n1*P21 + 3*n2*P22 + 3*n3*P23);
             double c = (-3*n1*P01 - 3*n2*P02 - 3*n3*P03 + 3*n1*P11 + 3*n2*P12 + 3*n3*P13);
             double d = (n1*P01 + n2*P02 + n3*P03 - n1*r1 - n2*r2 - n3*r3);
-            var (x1,x2,x3) = RealRoots(d/a, c/a, b/a);
+            var (x1,x2,x3) = MathNet.Numerics.RootFinding.Cubic.RealRoots(d/a, c/a, b/a);
             return (x1, Double.IsNaN(x2) ? (double?)null : x2, Double.IsNaN(x2) ? (double?)null : x3);
         }
 

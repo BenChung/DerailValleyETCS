@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using TMPro;
 using UnityEngine;
 
 namespace DVETCS
@@ -12,6 +13,7 @@ namespace DVETCS
     {
         public class VectorLine
         {
+            private bool removed = false;
             private LineRenderer renderer;
 
             public VectorLine(LineRenderer renderer)
@@ -19,11 +21,18 @@ namespace DVETCS
                 this.renderer = renderer;
             }
 
-            public void Remove()
+            public void Remove(bool keepStatic=false)
             {
+                if (removed || this.renderer.gameObject == null)
+                    return;
+                removed = true;
+                if (!keepStatic)
+                    Lines.UnregisterLine(this);
                 UnityEngine.Object.Destroy(this.renderer.gameObject);
             }
         }
+
+
         public static VectorLine DrawLine(Vector3 start, Vector3 end, Color color)
         {
             GameObject go = new GameObject("LineDrawer");
@@ -58,6 +67,26 @@ namespace DVETCS
             renderer.enabled = true;
 
             return new VectorLine(renderer);
+        }
+
+        private static HashSet<Lines.VectorLine> lastLines = new HashSet<Lines.VectorLine>();
+        public static VectorLine RegisterLine(VectorLine line)
+        {
+            lastLines.Add(line);
+            return line;
+        }
+        private static void UnregisterLine(VectorLine vectorLine)
+        {
+            lastLines.Remove(vectorLine);
+        }
+        public static void ClearLines()
+        {
+            foreach (var l in lastLines)
+            {
+                l.Remove(true);
+            }
+            lastLines.Clear();
+            
         }
     }
 }

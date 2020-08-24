@@ -4,7 +4,7 @@
   <PropertyGroup>
     <TargetFrameworks>net461</TargetFrameworks>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
-    <Version>1.0.307.1</Version>
+    <Version>1.0.888.1</Version>
   </PropertyGroup>
 
   <ItemGroup>
@@ -12,18 +12,16 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="Info.json">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-    </Content>
-  </ItemGroup>
-
-  <ItemGroup>
     <PackageReference Include="EmbedIO" Version="3.4.3" />
     <PackageReference Include="ilmerge" Version="3.0.29" />
+    <PackageReference Include="MathNet.Numerics" Version="4.11.0" />
+    <PackageReference Include="morelinq" Version="3.3.2" />
     <PackageReference Include="MSBump" Version="2.3.2">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
     </PackageReference>
+    <PackageReference Include="Newtonsoft.Json" Version="12.0.3" />
+    <PackageReference Include="RangeTree" Version="2.0.1" />
   </ItemGroup>
 
   <ItemGroup>
@@ -42,6 +40,12 @@
     <Reference Include="BezierCurves">
       <HintPath>D:\SteamLibrary\steamapps\common\Derail Valley\DerailValley_Data\Managed\BezierCurves.dll</HintPath>
     </Reference>
+    <Reference Include="DV.BrakeSystem">
+      <HintPath>D:\SteamLibrary\steamapps\common\Derail Valley\DerailValley_Data\Managed\DV.BrakeSystem.dll</HintPath>
+    </Reference>
+    <Reference Include="DV.Utils">
+      <HintPath>..\DV\DerailValley_Data\Managed\DV.Utils.dll</HintPath>
+    </Reference>
     <Reference Include="Microsoft.CSharp" />
     <Reference Include="Stateless">
       <HintPath>D:\SteamLibrary\steamapps\common\Derail Valley\DerailValley_Data\Managed\Stateless.dll</HintPath>
@@ -56,6 +60,9 @@
     </Reference>
     <Reference Include="UnityEngine.CoreModule">
       <HintPath>D:\SteamLibrary\steamapps\common\Derail Valley\DerailValley_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.PhysicsModule">
+      <HintPath>D:\SteamLibrary\steamapps\common\Derail Valley\DerailValley_Data\Managed\UnityEngine.PhysicsModule.dll</HintPath>
     </Reference>
     <Reference Include="UnityEngine.UI">
       <HintPath>D:\SteamLibrary\steamapps\common\Derail Valley\DerailValley_Data\Managed\UnityEngine.UI.dll</HintPath>
@@ -74,6 +81,6 @@
     <MakeDir Directories="$(TargetDir)\Mod">
     </MakeDir>
     <MakeDir Directories="$(SolutionDir)\DV\Mods\DVETCS"></MakeDir>
-    <Copy SourceFiles="$(TargetDir)DVETCS.dll;$(TargetDir)EmbedIO.dll;$(TargetDir)netstandard.dll;$(TargetDir)Swan.Lite.dll;$(TargetDir)System.Net.Http.dll;$(TargetDir)System.ValueTuple.dll;$(TargetDir)\Mod\Info.json" DestinationFolder="$(SolutionDir)\DV\Mods\DVETCS"></Copy>
+    <Copy SkipUnchangedFiles="True" SourceFiles="$(TargetDir)DVETCS.dll;$(TargetDir)MathNet.Numerics.dll;$(TargetDir)EmbedIO.dll;$(TargetDir)netstandard.dll;$(TargetDir)Swan.Lite.dll;$(TargetDir)MoreLinq.dll;$(TargetDir)System.Net.Http.dll;$(TargetDir)System.ValueTuple.dll;$(TargetDir)Newtonsoft.Json.dll;$(TargetDir)RangeTree.dll;$(TargetDir)\Mod\Info.json" DestinationFolder="$(SolutionDir)\DV\Mods\DVETCS"></Copy>
   </Target>
 </Project>
