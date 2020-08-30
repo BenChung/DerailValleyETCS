@@ -1,13 +1,18 @@
 ﻿using DV.Signs;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using MoreLinq;
 using TMPro;
 using UnityEngine;
+using Debug = UnityEngine.Debug;
 
+
+// TODO: Swap out the sign lookup with this
+// https://github.com/mspielberg/dv-hud/blob/master/SignIndexer.cs
 namespace DVETCS
 {
     public class SpeedProfile
@@ -171,7 +176,7 @@ namespace DVETCS
                 var dbec = Mathf.Max(vest + vdelta0 + vdelta1 / 2, vtarget) * Ttraction +
                            (Mathf.Max(vest + vdelta0 + vdelta1, vtarget) + vdelta2 / 2) * Tbrem;
 
-                Debug.Log($"EBI calc from pos {pos} at {pos+dbec} r vel {curve.VelocityForPosition(pos+dbec)} offs {vdelta0 + vdelta1 + vdelta2}");
+                //Debug.Log($"EBI calc from pos {pos} at {pos+dbec} r vel {curve.VelocityForPosition(pos+dbec)} offs {vdelta0 + vdelta1 + vdelta2}");
 
                 float vebi, debi;
                 if (curveType == CurveType.SBD)
@@ -196,7 +201,7 @@ namespace DVETCS
 
                 var Dbedisplay = (vest + vdelta0 + vdelta1 / 2) * Ttraction +
                                  (vest + vdelta0 + vdelta1 + vdelta2 / 2) * Tbrem;
-                Debug.Log($"dbec_display {Dbedisplay} dbec {dbec}");
+                //Debug.Log($"dbec_display {Dbedisplay} dbec {dbec}");
                 var vsbi = ComputeVSBI(pos, vest, Tbs1, Tbs2, Dbedisplay, vdelta0, vdelta1, vdelta2);
 
                 var vwarning = ComputeVSBI(pos + Twarning*vest, vest, Tbs1, Tbs2, Dbedisplay, vdelta0, vdelta1, vdelta2);
@@ -217,7 +222,7 @@ namespace DVETCS
 
                 var Tindication = Mathf.Max(0.8f * Tbs, 5.0f) + Tdriver;
                 var dindication = dperm - vest * Tindication;
-                Debug.Log($"vtarget {vtarget*3.6} vperm {vperm*3.6f} vwarning {vwarning*3.6} vsbi {vsbi * 3.6} vebi {vebi * 3.6}");
+                //Debug.Log($"vtarget {vtarget*3.6} vperm {vperm*3.6f} vwarning {vwarning*3.6} vsbi {vsbi * 3.6} vebi {vebi * 3.6}");
                 return (new SpeedStateInfo(vtarget * 3.6f, vperm * 3.6f, vwarning * 3.6f, vsbi * 3.6f, vebi * 3.6f), new TargetStateInfo(dindication, dperm, dwarning, dsbi, debi));
             }
 
@@ -236,8 +241,8 @@ namespace DVETCS
                 {
                     var basepos = pos + vest * Tbs2 + Dbedisplay;
                     var basevel = curve.VelocityForPosition(basepos);
-                    Debug.Log(
-                        $"SBI calc {basevel - (vdelta0 + vdelta1 + vdelta2)} from pos {pos} at pos {basepos} w/ basevel {basevel} and modifier {vdelta0 + vdelta1 + vdelta2} target {vtarget} maxvel {BlockSegment.CalculateSBI(vtarget)}");
+                    //Debug.Log(
+                    //    $"SBI calc {basevel - (vdelta0 + vdelta1 + vdelta2)} from pos {pos} at pos {basepos} w/ basevel {basevel} and modifier {vdelta0 + vdelta1 + vdelta2} target {vtarget} maxvel {BlockSegment.CalculateSBI(vtarget)}");
                     if (pos + vest * Tbs2 + Dbedisplay > curve.PositionForVelocity(vtarget))
                     {
                         vsbi = BlockSegment.CalculateSBI(vtarget);
@@ -323,6 +328,7 @@ namespace DVETCS
             this.block = block;
             this.signs = UnityEngine.Object.FindObjectsOfType<SignDebug>();
             this.speedLimits = new SortedDictionary<double, ISpeedSign>();
+
             foreach (var ti in block) AddSigns(ti);
             block.TrackAdded += AddedTrack;
             block.TrackRemoved += TrackRemoved;
@@ -377,43 +383,27 @@ namespace DVETCS
         Dictionary<SignDebug, Lines.VectorLine> signLines = new Dictionary<SignDebug, Lines.VectorLine>();
         private void AddSigns(TrackBlock.TrackInfo along)
         {
-            Debug.Log("Add Signs");
-            var curveSpans = along.track.curve.PointSpans();
-            var planes = signs.Select(s => (sign: s, offset: s.transform.position, normal: s.transform.TransformDirection(Vector3.forward)));
-            var intersections = planes.Select(inter => (
-                    sign: inter.sign,
-                    intersections: along.track.curve.PlaneIntersect(inter.normal, inter.offset)
-                                                    .Where(i => AlignedDirections(along.track.curve.GetTangent(i.p1, i.p2, (float)i.span), inter.normal, along.relativeDirection, -0.98f))
-                                                    .Where(i => Vector3.Distance(BezierCurve.GetPoint(i.p1, i.p2, (float)i.span), inter.offset) < 3f),
-                    speeds: inter.sign.GetComponentsInChildren<TextMeshPro>()
-                                     .Where(tm => !String.IsNullOrWhiteSpace(tm.text) && tryParseInt(tm.text) >= 0)
-                                     .Select(tm => int.Parse(tm.text) * 10))).ToList();
-
-            foreach (var intersection in intersections)
+            foreach (var sign in TrackIndexer.GetSignData(along.track))
             {
-                if (intersection.intersections.Count() == 0) continue; // sign not relevant
-                var primeInt = intersection.intersections.OrderBy(e => Vector3.Distance(BezierCurve.GetPoint(e.p1, e.p2, (float)e.span), intersection.sign.transform.position)).First();
-                var curvePos = curveSpans[primeInt.p1] + primeInt.span * (curveSpans[primeInt.p2] - curveSpans[primeInt.p1]);
+                if (sign.Direction != along.relativeDirection) continue;
+                
+                var curvePos = sign.Span;
                 var signSpan = along.offset + (along.relativeDirection ? curvePos : along.track.curve.length - curvePos);
-                var signSpeed = 0;
-                if (intersection.speeds.Count() == 1)
+                switch (sign)
                 {
-                    signSpeed = intersection.speeds.First();
-                    AddLimitRaw((float)signSpan, new NormalSign(signSpeed));
-                }
-                else // sign for a junction
-                {
-                    var selJunction = along.relativeDirection ? along.track.outJunction : along.track.inJunction;
-                    if (selJunction == null)
-                    {
-                        throw new Exception($"Null junction following junction speed sign {signSpan}");
-                    }
-                    if (selJunction.inBranch.track != along.track)
-                        throw new Exception("Invalid junction construction (junction following junction speed sign not properly aligned)");
-                    signSpeed = intersection.speeds.ToList()[selJunction.selectedBranch];
-                    var junctionSign = new JunctionSign(intersection.speeds.Select(Convert.ToSingle).ToArray(), selJunction);
-                    junctionSign.SpeedChanged += (sender, args) => dirty = true;
-                    AddLimitRaw((float)signSpan, junctionSign);
+                    case DVETCS.NormalSign nsign:
+                        AddLimitRaw((float)signSpan, new NormalSign(nsign.Limit));
+                        break;
+                    case DVETCS.JunctionSign jsign:
+                        var selJunction = along.relativeDirection ? along.track.outJunction : along.track.inJunction;
+                        if (selJunction == null)
+                            throw new Exception($"Null junction following junction speed sign {signSpan}");
+                        if (selJunction.inBranch.track != along.track)
+                            throw new Exception("Invalid junction construction (junction following junction speed sign not properly aligned)");
+                        var junctionSign = new JunctionSign(Array.ConvertAll(jsign.Limits, Convert.ToSingle), selJunction);
+                        junctionSign.SpeedChanged += (sender, args) => dirty = true;
+                        AddLimitRaw((float)signSpan, junctionSign);
+                        break;
                 }
             }
         }
@@ -518,88 +508,85 @@ namespace DVETCS
                     new BrakingCurveSegment(brakingCurve, CurveType.EBD, (float)(nspeed / 3.6)));
                 Debug.Log("Braking curve");
             }
+            RefreshSigns();
             dirty = false;
         }
 
-        public (SpeedStateInfo currentSSI, TargetStateInfo currentTSI) GetSpeedLimit(double pos, float vest, float accel)
+        public (SpeedStateInfo? currentSSI, TargetStateInfo currentTSI, List<MRSPElem> mrsp, float distanceToTarget) GetSpeedLimit(double pos, float vest, float accel)
         {
-            var res = MRSP.Query(pos);
+            var res = MRSP.Query(pos).ToList();
             SpeedStateInfo? currentSSI = null;
             TargetStateInfo currentTSI = null;
 
             // calculate the MRDT
-            var speedInfos = res.Select(x => (tgt: x, ti: x.SpeedsAt((float) pos, vest, accel))).ToList();
+            var speedInfos = res.OfType<BrakingCurveSegment>().Select(x => (tgt: x, ti: x.SpeedsAt((float) pos, vest, accel))).ToHashSet();
             var mrdt0s = speedInfos.MinBy(s => s.ti.ssi.P);
-            if (!mrdt0s.Any())
-                throw new Exception("No speed region found!");
 
-            var mrdt = mrdt0s.First();
-            var unused = speedInfos.ToHashSet();
-            var updated = true;
-            unused.Remove(mrdt);
-            while (unused.Any() && updated)
+            float mrdtPos = float.MaxValue;
+            float distanceToTarget = float.MaxValue;
+            if (mrdt0s.Any())
             {
-                updated = false;
-                foreach (var tgt in unused)
+                var mrdt = mrdt0s.First();
+                var updated = true;
+                speedInfos.Remove(mrdt);
+                while (speedInfos.Any() && updated)
                 {
-                    if (tgt.ti.tsi.dI < mrdt.ti.tsi.dP)
+                    updated = false;
+                    foreach (var tgt in speedInfos)
                     {
-                        mrdt = tgt;
-                        unused.Remove(mrdt);
-                        updated = true;
-                        break;
+                        if (tgt.ti.tsi.dI < mrdt.ti.tsi.dP)
+                        {
+                            mrdt = tgt;
+                            speedInfos.Remove(mrdt);
+                            updated = true;
+                            break;
+                        }
                     }
                 }
+
+                currentSSI = mrdt.ti.ssi;
+                currentTSI = mrdt.ti.tsi;
+                mrdtPos = mrdt.tgt.Target;
+                distanceToTarget = mrdtPos - (float)pos;
             }
-            
 
 
-            foreach (var ts in res)
+            var outSSI = res.OfType<BlockSegment>().Select(s => s.SpeedsAt((float) pos, vest, accel).ssi).Aggregate(
+                currentSSI.HasValue ? currentSSI.Value : new SpeedStateInfo(float.MaxValue, float.MaxValue, float.MaxValue, float.MaxValue, float.MaxValue),
+                (ssi, ssi2) => ssi.Min(ssi2));
+
+
+            float lastSpeedPos = (float)block.Select(b => b.offset).Min();
+            float lastSpeed = 40.0f;
+            var mostRecentLimits =
+                MRSPdict.Where(kv => kv.Key < pos).MaxBy(kv => kv.Key);
+            if (mostRecentLimits.Any())
             {
-                var (ssi, tsi) = ts.SpeedsAt((float)pos, vest, accel);
-                if (currentSSI == null)
-                    currentSSI = ssi;
-                if (currentTSI == null && tsi != null)
-                    currentTSI = tsi;
-                
-                currentSSI = currentSSI.Value.Min(ssi);
-                currentTSI = currentTSI != null ? currentTSI.Min(tsi) : tsi;
+                var mostRecentLimit = mostRecentLimits.First();
+                lastSpeedPos = (float) mostRecentLimit.Key;
+                lastSpeed = (float) mostRecentLimit.Value;
             }
-            return (currentSSI.Value, currentTSI);
+
+            var mrsps = new List<MRSPElem>();
+            mrsps.Add(new MRSPElem(lastSpeedPos - (float)pos, lastSpeed, false));
+            mrsps.AddRange(MRSPdict.Where(k => k.Key > pos)
+                .Select(k => new MRSPElem((float)k.Key - (float)pos, (float)k.Value, Math.Abs(k.Key - mrdtPos) < 0.1)));
+
+            return (outSSI, currentTSI, mrsps, distanceToTarget);
         }
 
         public struct MRSPElem
         {
-            public MRSPElem(float distance, float speed)
+            public MRSPElem(float distance, float speed, bool isTarget)
             {
                 this.distance = distance;
                 this.speed = speed;
+                this.isTarget = isTarget;
             }
             public float distance;
             public float speed;
+            public bool isTarget;
         }
-        public List<MRSPElem> GetClientMRSP(float front)
-        {
-            float lastSpeedPos = (float)block.Select(b => b.offset).Min();
-            float lastSpeed = 40.0f;
-            foreach (var kv in MRSPdict)
-            {
-                if (kv.Key > front) continue;
-                if (kv.Key > lastSpeedPos)
-                {
-                    lastSpeedPos = (float)kv.Key;
-                    lastSpeed = (float)kv.Value;
-                }
-            }
-
-            var mrsps = new List<MRSPElem>();
-            mrsps.Add(new MRSPElem(lastSpeedPos - front, lastSpeed));
-
-            mrsps.AddRange(MRSPdict.Where(k => k.Key > front)
-                .Select(k => new MRSPElem((float) k.Key - front, (float) k.Value)));
-            return mrsps;
-        }
-
 
 
         private List<Lines.VectorLine> myLines = new List<Lines.VectorLine>();
